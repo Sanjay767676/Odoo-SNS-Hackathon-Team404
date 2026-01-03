@@ -5,7 +5,6 @@ import { z } from "zod";
 
 // === TABLE DEFINITIONS ===
 
-// Users table for basic profile information
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -16,7 +15,6 @@ export const users = pgTable("users", {
   emailIdx: index("email_idx").on(t.email),
 }));
 
-// Trips table - can be public or private
 export const trips = pgTable("trips", {
   id: serial("id").primaryKey(),
   ownerId: integer("owner_id").references(() => users.id).notNull(),
@@ -28,7 +26,6 @@ export const trips = pgTable("trips", {
   ownerIdx: index("owner_idx").on(t.ownerId),
 }));
 
-// TripStops table - represents cities visited in a trip
 export const tripStops = pgTable("trip_stops", {
   id: serial("id").primaryKey(),
   tripId: integer("trip_id").references(() => trips.id).notNull(),
@@ -40,16 +37,14 @@ export const tripStops = pgTable("trip_stops", {
   tripStopsIdx: index("trip_stops_idx").on(t.tripId),
 }));
 
-// Master list of Activities (reusable across trips)
 export const activities = pgTable("activities", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  category: text("category"), // e.g., 'Dining', 'Museum', 'Park'
+  category: text("category"),
   description: text("description"),
   defaultCost: decimal("default_cost", { precision: 10, scale: 2 }),
 });
 
-// TripActivities - junction table for many-to-many relationship
 export const tripActivities = pgTable("trip_activities", {
   id: serial("id").primaryKey(),
   tripStopId: integer("trip_stop_id").references(() => tripStops.id).notNull(),
@@ -61,18 +56,16 @@ export const tripActivities = pgTable("trip_activities", {
   stopActivityIdx: index("stop_activity_idx").on(t.tripStopId, t.activityId),
 }));
 
-// Budgets table - supports budgeting per trip
 export const budgets = pgTable("budgets", {
   id: serial("id").primaryKey(),
   tripId: integer("trip_id").references(() => trips.id).notNull(),
-  category: text("category").notNull(), // e.g., 'Transport', 'Food', 'Leisure'
+  category: text("category").notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   currency: text("currency").default("USD").notNull(),
 }, (t) => ({
   tripBudgetIdx: index("trip_budget_idx").on(t.tripId),
 }));
 
-// SharedTrips - for public/shared itineraries
 export const sharedTrips = pgTable("shared_trips", {
   tripId: integer("trip_id").references(() => trips.id).notNull(),
   userId: integer("user_id").references(() => users.id).notNull(),
@@ -133,9 +126,22 @@ export const insertSharedTripSchema = createInsertSchema(sharedTrips).omit({ sha
 // === EXPLICIT API CONTRACT TYPES ===
 
 export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
+
 export type Trip = typeof trips.$inferSelect;
+export type InsertTrip = z.infer<typeof insertTripSchema>;
+
 export type TripStop = typeof tripStops.$inferSelect;
+export type InsertTripStop = z.infer<typeof insertTripStopSchema>;
+
 export type Activity = typeof activities.$inferSelect;
+export type InsertActivity = z.infer<typeof insertActivitySchema>;
+
 export type TripActivity = typeof tripActivities.$inferSelect;
+export type InsertTripActivity = z.infer<typeof insertTripActivitySchema>;
+
 export type Budget = typeof budgets.$inferSelect;
+export type InsertBudget = z.infer<typeof insertBudgetSchema>;
+
 export type SharedTrip = typeof sharedTrips.$inferSelect;
+export type InsertSharedTrip = z.infer<typeof insertSharedTripSchema>;
