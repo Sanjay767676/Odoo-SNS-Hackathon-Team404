@@ -16,18 +16,22 @@ import Signup from "@/pages/Signup";
 
 function Router() {
   return (
-    <AppLayout>
-      <Switch>
-        <Route path="/" component={Dashboard} />
-        <Route path="/dashboard" component={Dashboard} />
-        <Route path="/create-trip" component={CreateTrip} />
-        <Route path="/trips" component={MyTrips} />
-        <Route path="/builder" component={ItineraryBuilder} />
-        <Route path="/login" component={Login} />
-        <Route path="/signup" component={Signup} />
-        <Route component={NotFound} />
-      </Switch>
-    </AppLayout>
+    <Switch>
+      <Route path="/login" component={Login} />
+      <Route path="/signup" component={Signup} />
+      <Route>
+        <AppLayout>
+          <Switch>
+            <Route path="/" component={Dashboard} />
+            <Route path="/dashboard" component={Dashboard} />
+            <Route path="/create-trip" component={CreateTrip} />
+            <Route path="/trips" component={MyTrips} />
+            <Route path="/builder" component={ItineraryBuilder} />
+            <Route component={NotFound} />
+          </Switch>
+        </AppLayout>
+      </Route>
+    </Switch>
   );
 }
 
