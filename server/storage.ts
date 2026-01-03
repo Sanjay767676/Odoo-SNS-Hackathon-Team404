@@ -1,11 +1,11 @@
-import { 
-  users, trips, tripStops, activities, tripActivities, budgets, sharedTrips, 
-  type User, type InsertUser, 
-  type Trip, type InsertTrip, 
-  type TripStop, type InsertTripStop, 
-  type Activity, type InsertActivity, 
-  type TripActivity, type InsertTripActivity, 
-  type Budget, type InsertBudget 
+import {
+  users, trips, tripStops, activities, tripActivities, budgets, sharedTrips,
+  type User, type InsertUser,
+  type Trip, type InsertTrip,
+  type TripStop, type InsertTripStop,
+  type Activity, type InsertActivity,
+  type TripActivity, type InsertTripActivity,
+  type Budget, type InsertBudget
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, sql } from "drizzle-orm";
@@ -15,19 +15,26 @@ export interface IStorage {
   getUsers(): Promise<User[]>;
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  createUserWithPassword(email: string, name: string, password: string): Promise<User>;
+  updateUserPassword(userId: number, hashedPassword: string): Promise<void>;
+  setResetToken(email: string, token: string, expiry: Date): Promise<void>;
+  verifyResetToken(token: string): Promise<User | undefined>;
 
   // Trip operations
   getTrips(userId: number): Promise<Trip[]>;
   getTrip(id: number, userId: number): Promise<Trip | undefined>;
+  getTripById(id: number): Promise<Trip | undefined>;
   createTrip(trip: InsertTrip): Promise<Trip>;
   updateTrip(id: number, userId: number, updates: Partial<InsertTrip>): Promise<Trip | undefined>;
   deleteTrip(id: number, userId: number): Promise<boolean>;
 
   // Stop operations
+  getTripStops(tripId: number): Promise<TripStop[]>;
+  getTripStopById(id: number): Promise<TripStop | undefined>;
   getStopsByTrip(tripId: number, userId: number): Promise<TripStop[]>;
-  createStop(stop: InsertTripStop): Promise<TripStop>;
-  deleteStop(id: number, userId: number): Promise<boolean>;
+  createTripStop(stop: InsertTripStop): Promise<TripStop>;
+  updateTripStop(id: number, updates: Partial<InsertTripStop>): Promise<TripStop | undefined>;
+  deleteTripStop(id: number): Promise<void>;
   updateStopOrder(id: number, userId: number, order: number): Promise<TripStop | undefined>;
 
   // Activity operations
@@ -35,9 +42,11 @@ export interface IStorage {
   createActivity(activity: InsertActivity): Promise<Activity>;
 
   // Trip Activity operations
+  getTripActivities(tripId: number): Promise<TripActivity[]>;
+  getTripActivityById(id: number): Promise<TripActivity | undefined>;
   getTripActivitiesByStop(tripStopId: number, userId: number): Promise<TripActivity[]>;
   createTripActivity(tripActivity: InsertTripActivity): Promise<TripActivity>;
-  deleteTripActivity(id: number, userId: number): Promise<boolean>;
+  deleteTripActivity(id: number): Promise<void>;
 
   // Budget operations
   getBudgetsByTrip(tripId: number): Promise<Budget[]>;
@@ -59,18 +68,51 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db.insert(users).values(insertUser).returning();
+  async createUserWithPassword(email: string, name: string, password: string): Promise<User> {
+    const [user] = await db.insert(users).values({
+      email,
+      name,
+      password,
+      emailVerified: false,
+    }).returning();
     return user;
   }
 
-  // Trip operations with ownership
+  async updateUserPassword(userId: number, hashedPassword: string): Promise<void> {
+    await db.update(users)
+      .set({ password: hashedPassword })
+      .where(eq(users.id, userId));
+  }
+
+  async setResetToken(email: string, token: string, expiry: Date): Promise<void> {
+    await db.update(users)
+      .set({ resetToken: token, resetTokenExpiry: expiry })
+      .where(eq(users.email, email));
+  }
+
+  async verifyResetToken(token: string): Promise<User | undefined> {
+    const [user] = await db.select()
+      .from(users)
+      .where(and(
+        eq(users.resetToken, token),
+        sql`reset_token_expiry > NOW()`
+      ));
+    return user;
+  }
+
+  // === TRIP OPERATIONS ===
+
   async getTrips(userId: number): Promise<Trip[]> {
-    return await db.select().from(trips).where(eq(trips.ownerId, userId));
+    return await db.select().from(trips).where(eq(trips.userId, userId));
   }
 
   async getTrip(id: number, userId: number): Promise<Trip | undefined> {
-    const [trip] = await db.select().from(trips).where(and(eq(trips.id, id), eq(trips.ownerId, userId)));
+    const [trip] = await db.select().from(trips).where(and(eq(trips.id, id), eq(trips.userId, userId)));
+    return trip;
+  }
+
+  async getTripById(id: number): Promise<Trip | undefined> {
+    const [trip] = await db.select().from(trips).where(eq(trips.id, id));
     return trip;
   }
 
@@ -82,49 +124,65 @@ export class DatabaseStorage implements IStorage {
   async updateTrip(id: number, userId: number, updates: Partial<InsertTrip>): Promise<Trip | undefined> {
     const [updated] = await db.update(trips)
       .set(updates)
-      .where(and(eq(trips.id, id), eq(trips.ownerId, userId)))
+      .where(and(eq(trips.id, id), eq(trips.userId, userId)))
       .returning();
     return updated;
   }
 
   async deleteTrip(id: number, userId: number): Promise<boolean> {
-    const result = await db.delete(trips).where(and(eq(trips.id, id), eq(trips.ownerId, userId)));
+    const result = await db.delete(trips).where(and(eq(trips.id, id), eq(trips.userId, userId)));
     return result.rowCount ? result.rowCount > 0 : false;
   }
 
-  // Stop operations
+  // === TRIP STOPS ===
+
+  async getTripStops(tripId: number): Promise<TripStop[]> {
+    return await db.select().from(tripStops)
+      .where(eq(tripStops.tripId, tripId))
+      .orderBy(tripStops.orderIndex);
+  }
+
+  async getTripStopById(id: number): Promise<TripStop | undefined> {
+    const [stop] = await db.select().from(tripStops).where(eq(tripStops.id, id));
+    return stop;
+  }
+
   async getStopsByTrip(tripId: number, userId: number): Promise<TripStop[]> {
     const trip = await this.getTrip(tripId, userId);
     if (!trip) return [];
-    return await db.select().from(tripStops).where(eq(tripStops.tripId, tripId));
+    return await db.select().from(tripStops)
+      .where(eq(tripStops.tripId, tripId))
+      .orderBy(tripStops.orderIndex);
   }
 
-  async createStop(insertStop: InsertTripStop): Promise<TripStop> {
+  async createTripStop(insertStop: InsertTripStop): Promise<TripStop> {
     const [stop] = await db.insert(tripStops).values(insertStop).returning();
     return stop;
   }
 
-  async deleteStop(id: number, userId: number): Promise<boolean> {
-    const result = await db.delete(tripStops)
-      .where(and(
-        eq(tripStops.id, id),
-        sql`trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId})`
-      ));
-    return result.rowCount ? result.rowCount > 0 : false;
-  }
-
-  async updateStopOrder(id: number, userId: number, order: number): Promise<TripStop | undefined> {
+  async updateTripStop(id: number, updates: Partial<InsertTripStop>): Promise<TripStop | undefined> {
     const [updated] = await db.update(tripStops)
-      .set({ order })
-      .where(and(
-        eq(tripStops.id, id),
-        sql`trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId})`
-      ))
+      .set(updates)
+      .where(eq(tripStops.id, id))
       .returning();
     return updated;
   }
 
-  // Activity operations
+  async deleteTripStop(id: number): Promise<void> {
+    await db.delete(tripStops).where(eq(tripStops.id, id));
+  }
+
+
+  async updateStopOrder(id: number, userId: number, order: number): Promise<TripStop | undefined> {
+    const [updated] = await db.update(tripStops)
+      .set({ orderIndex: order })
+      .where(eq(tripStops.id, id))
+      .returning();
+    return updated;
+  }
+
+  // === ACTIVITIES ===
+
   async getActivities(): Promise<Activity[]> {
     return await db.select().from(activities);
   }
@@ -134,16 +192,26 @@ export class DatabaseStorage implements IStorage {
     return activity;
   }
 
-  // Trip Activity operations
+  // === TRIP ACTIVITIES ===
+
+  async getTripActivities(tripId: number): Promise<TripActivity[]> {
+    return await db.select().from(tripActivities)
+      .where(eq(tripActivities.tripId, tripId))
+      .orderBy(tripActivities.scheduledDate, tripActivities.orderIndex);
+  }
+
+  async getTripActivityById(id: number): Promise<TripActivity | undefined> {
+    const [activity] = await db.select().from(tripActivities)
+      .where(eq(tripActivities.id, id));
+    return activity;
+  }
+
   async getTripActivitiesByStop(tripStopId: number, userId: number): Promise<TripActivity[]> {
-    const [stop] = await db.select()
-      .from(tripStops)
-      .where(and(
-        eq(tripStops.id, tripStopId),
-        sql`trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId})`
-      ));
-    if (!stop) return [];
-    return await db.select().from(tripActivities).where(eq(tripActivities.tripStopId, tripStopId));
+    return await db.select()
+      .from(tripActivities)
+      .innerJoin(trips, eq(tripActivities.tripId, trips.id))
+      .where(and(eq(tripActivities.stopId, tripStopId), eq(trips.userId, userId)))
+      .then(results => results.map(r => r.trip_activities));
   }
 
   async createTripActivity(insertTripActivity: InsertTripActivity): Promise<TripActivity> {
@@ -151,13 +219,8 @@ export class DatabaseStorage implements IStorage {
     return tripActivity;
   }
 
-  async deleteTripActivity(id: number, userId: number): Promise<boolean> {
-    const result = await db.delete(tripActivities)
-      .where(and(
-        eq(tripActivities.id, id),
-        sql`trip_stop_id IN (SELECT id FROM trip_stops WHERE trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId}))`
-      ));
-    return result.rowCount ? result.rowCount > 0 : false;
+  async deleteTripActivity(id: number): Promise<void> {
+    await db.delete(tripActivities).where(eq(tripActivities.id, id));
   }
 
   // Budget operations

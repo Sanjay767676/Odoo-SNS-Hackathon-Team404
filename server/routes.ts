@@ -3,64 +3,198 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import { hashPassword, verifyPassword, generateToken, verifyToken, generateResetToken } from "./auth";
+import { registerSchema, loginSchema, resetPasswordRequestSchema, resetPasswordSchema } from "@shared/auth-schemas";
 
-// Mock auth middleware - assuming user ID is in req.user
-// Since JWT middleware is mentioned as already implemented but not shown,
-// we will assume req.user.id exists.
+// JWT Authentication middleware
 const authenticate = (req: Request, res: Response, next: NextFunction) => {
-  // In a real app, this would be set by passport/jwt middleware
-  // For now, we'll try to get it from a header or default for testing
-  const userId = req.headers["x-user-id"];
-  if (!userId) {
+  const token = req.cookies?.token || req.headers.authorization?.replace("Bearer ", "");
+
+  if (!token) {
     return res.status(401).json({ message: "Unauthorized" });
   }
-  (req as any).user = { id: Number(userId) };
+
+  const payload = verifyToken(token);
+  if (!payload) {
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+
+  (req as any).user = { id: payload.userId, email: payload.email };
   next();
 };
-
-async function seedDatabase() {
-  const existingUsers = await storage.getUsers();
-  if (existingUsers.length === 0) {
-    const user = await storage.createUser({ name: "Traveler", email: "traveler@example.com" });
-    const trip = await storage.createTrip({ 
-      ownerId: user.id, 
-      title: "My Adventure", 
-      description: "Exploring the world", 
-      isPublic: true 
-    });
-    
-    const stop = await storage.createStop({
-      tripId: trip.id,
-      city: "London",
-      arrivalDate: new Date(),
-      departureDate: new Date(),
-      order: 1
-    });
-
-    const activity = await storage.createActivity({
-      name: "Big Ben",
-      category: "Sightseeing",
-      description: "Famous clock tower",
-      defaultCost: "0"
-    });
-
-    await storage.createTripActivity({
-      tripStopId: stop.id,
-      activityId: activity.id,
-      startTime: new Date(),
-      actualCost: "0",
-      notes: "Free to see from outside"
-    });
-  }
-}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  await seedDatabase();
+  // ===== AUTHENTICATION ROUTES =====
 
-  // Trips
+  // Register
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const input = registerSchema.parse(req.body);
+
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(input.email);
+      if (existingUser) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+
+      // Hash password and create user
+      const hashedPassword = await hashPassword(input.password);
+      const user = await storage.createUserWithPassword(input.email, input.name, hashedPassword);
+
+      // Generate token
+      const token = generateToken({ userId: user.id, email: user.email });
+
+      // Set cookie
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      });
+
+      res.status(201).json({
+        user: { id: user.id, name: user.name, email: user.email },
+        token,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      console.error("Registration error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Login
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const input = loginSchema.parse(req.body);
+
+      // Find user
+      const user = await storage.getUserByEmail(input.email);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Verify password
+      const isValid = await verifyPassword(input.password, user.password);
+      if (!isValid) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Generate token
+      const token = generateToken({ userId: user.id, email: user.email });
+
+      // Set cookie
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      res.json({
+        user: { id: user.id, name: user.name, email: user.email },
+        token,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      console.error("Login error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Logout
+  app.post("/api/auth/logout", (req, res) => {
+    res.clearCookie("token");
+    res.json({ message: "Logged out successfully" });
+  });
+
+  // Get  // Create trip
+  app.post("/api/trips", authenticate, async (req: any, res) => {
+    try {
+      const { title, description, startDate, endDate, isPublic } = req.body;
+
+      if (!title) {
+        return res.status(400).json({ message: "Title is required" });
+      }
+
+      const trip = await storage.createTrip({
+        userId: req.user.id,
+        title,
+        description: description || null,
+        startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
+        isPublic: isPublic || false,
+      });
+
+      res.json(trip);
+    } catch (error) {
+      console.error("Error creating trip:", error);
+      res.status(500).json({ message: "Failed to create trip" });
+    }
+  });
+
+  // Request password reset
+  app.post("/api/auth/reset-password-request", async (req, res) => {
+    try {
+      const input = resetPasswordRequestSchema.parse(req.body);
+      const user = await storage.getUserByEmail(input.email);
+
+      if (user) {
+        const resetToken = generateResetToken();
+        const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await storage.setResetToken(input.email, resetToken, expiry);
+
+        // In production, send email with reset link
+        // For now, just return success
+        console.log(`Password reset token for ${input.email}: ${resetToken}`);
+      }
+
+      // Always return success to prevent email enumeration
+      res.json({ message: "If the email exists, a reset link has been sent" });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      console.error("Reset request error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Reset password
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const input = resetPasswordSchema.parse(req.body);
+
+      const user = await storage.verifyResetToken(input.token);
+      if (!user) {
+        return res.status(400).json({ message: "Invalid or expired reset token" });
+      }
+
+      const hashedPassword = await hashPassword(input.password);
+      await storage.updateUserPassword(user.id, hashedPassword);
+
+      // Clear reset token
+      await storage.setResetToken(user.email, "", new Date(0));
+
+      res.json({ message: "Password reset successfully" });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      console.error("Reset password error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // === TRIP ROUTES ===
+
   app.get(api.trips.list.path, authenticate, async (req: any, res) => {
     const trips = await storage.getTrips(req.user.id);
     res.json(trips);
@@ -75,7 +209,7 @@ export async function registerRoutes(
   app.post(api.trips.create.path, authenticate, async (req: any, res) => {
     try {
       const input = api.trips.create.input.parse(req.body);
-      const trip = await storage.createTrip({ ...input, ownerId: req.user.id });
+      const trip = await storage.createTrip({ ...input, userId: req.user.id });
       res.status(201).json(trip);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -158,7 +292,7 @@ export async function registerRoutes(
     try {
       const tripStopId = Number(req.params.tripStopId);
       const input = api.tripActivities.create.input.parse(req.body);
-      const tripActivity = await storage.createTripActivity({ ...input, tripStopId });
+      const tripActivity = await storage.createTripActivity({ ...input, stopId });
       res.status(201).json(tripActivity);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -172,6 +306,182 @@ export async function registerRoutes(
     const deleted = await storage.deleteTripActivity(Number(req.params.id), req.user.id);
     if (!deleted) return res.status(404).json({ message: "Activity not found" });
     res.status(204).end();
+  });
+
+  // ===== TRIP STOPS ROUTES =====
+
+  // Get all stops for a trip
+  app.get("/api/trips/:id/stops", authenticate, async (req: any, res) => {
+    try {
+      const tripId = parseInt(req.params.id);
+      const trip = await storage.getTripById(tripId);
+
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(404).json({ message: "Trip not found" });
+      }
+
+      const stops = await storage.getTripStops(tripId);
+      res.json(stops);
+    } catch (error) {
+      console.error("Error fetching trip stops:", error);
+      res.status(500).json({ message: "Failed to fetch trip stops" });
+    }
+  });
+
+  // Create a stop for a trip
+  app.post("/api/trips/:id/stops", authenticate, async (req: any, res) => {
+    try {
+      const tripId = parseInt(req.params.id);
+      const trip = await storage.getTripById(tripId);
+
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(404).json({ message: "Trip not found" });
+      }
+
+      const { cityName, country, arrivalDate, departureDate, notes } = req.body;
+
+      if (!cityName || !country || !arrivalDate || !departureDate) {
+        return res.status(400).json({ message: "City name, country, arrival date, and departure date are required" });
+      }
+
+      const stop = await storage.createTripStop({
+        tripId,
+        cityName,
+        country,
+        arrivalDate: new Date(arrivalDate),
+        departureDate: new Date(departureDate),
+        notes: notes || null,
+      });
+
+      res.json(stop);
+    } catch (error) {
+      console.error("Error creating trip stop:", error);
+      res.status(500).json({ message: "Failed to create trip stop" });
+    }
+  });
+
+  // Update a trip stop
+  app.put("/api/stops/:id", authenticate, async (req: any, res) => {
+    try {
+      const stopId = parseInt(req.params.id);
+      const stop = await storage.getTripStopById(stopId);
+
+      if (!stop) {
+        return res.status(404).json({ message: "Stop not found" });
+      }
+
+      const trip = await storage.getTripById(stop.tripId);
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const updated = await storage.updateTripStop(stopId, req.body);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating trip stop:", error);
+      res.status(500).json({ message: "Failed to update trip stop" });
+    }
+  });
+
+  // Delete a trip stop
+  app.delete("/api/stops/:id", authenticate, async (req: any, res) => {
+    try {
+      const stopId = parseInt(req.params.id);
+      const stop = await storage.getTripStopById(stopId);
+
+      if (!stop) {
+        return res.status(404).json({ message: "Stop not found" });
+      }
+
+      const trip = await storage.getTripById(stop.tripId);
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      await storage.deleteTripStop(stopId);
+      res.json({ message: "Stop deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting trip stop:", error);
+      res.status(500).json({ message: "Failed to delete trip stop" });
+    }
+  });
+
+  // ===== TRIP ACTIVITIES ROUTES =====
+
+  // Get all activities for a trip
+  app.get("/api/trips/:id/activities", authenticate, async (req: any, res) => {
+    try {
+      const tripId = parseInt(req.params.id);
+      const trip = await storage.getTripById(tripId);
+
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(404).json({ message: "Trip not found" });
+      }
+
+      const activities = await storage.getTripActivities(tripId);
+      res.json(activities);
+    } catch (error) {
+      console.error("Error fetching trip activities:", error);
+      res.status(500).json({ message: "Failed to fetch trip activities" });
+    }
+  });
+
+  // Create an activity for a trip
+  app.post("/api/trips/:id/activities", authenticate, async (req: any, res) => {
+    try {
+      const tripId = parseInt(req.params.id);
+      const trip = await storage.getTripById(tripId);
+
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(404).json({ message: "Trip not found" });
+      }
+
+      const { stopId, activityId, title, description, scheduledDate, cost, duration, notes } = req.body;
+
+      if (!title || !scheduledDate || !activityId) {
+        return res.status(400).json({ message: "Title, scheduled date, and activity ID are required" });
+      }
+
+      const activity = await storage.createTripActivity({
+        tripId,
+        stopId: stopId || null,
+        activityId,
+        title,
+        description: description || null,
+        scheduledDate: new Date(scheduledDate),
+        cost: cost || "0",
+        duration: duration || null,
+        notes: notes || null,
+      });
+
+      res.json(activity);
+    } catch (error) {
+      console.error("Error creating trip activity:", error);
+      res.status(500).json({ message: "Failed to create trip activity" });
+    }
+  });
+
+  // Delete a trip activity
+  app.delete("/api/activities/:id", authenticate, async (req: any, res) => {
+    try {
+      const activityId = parseInt(req.params.id);
+      const activity = await storage.getTripActivityById(activityId);
+
+      if (!activity) {
+        return res.status(404).json({ message: "Activity not found" });
+      }
+
+      const trip = await storage.getTripById(activity.tripId);
+      if (!trip || trip.userId !== req.user.id) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      await storage.deleteTripActivity(activityId);
+      res.json({ message: "Activity deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting trip activity:", error);
+      res.status(500).json({ message: "Failed to delete trip activity" });
+    }
   });
 
   return httpServer;

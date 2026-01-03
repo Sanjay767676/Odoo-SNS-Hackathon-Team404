@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, decimal, boolean, index, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, decimal, numeric, boolean, index, primaryKey } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -9,7 +9,11 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
+  password: text("password").notNull(),
   image: text("image"),
+  emailVerified: boolean("email_verified").default(false).notNull(),
+  resetToken: text("reset_token"),
+  resetTokenExpiry: timestamp("reset_token_expiry"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   emailIdx: index("email_idx").on(t.email),
@@ -17,24 +21,30 @@ export const users = pgTable("users", {
 
 export const trips = pgTable("trips", {
   id: serial("id").primaryKey(),
-  ownerId: integer("owner_id").references(() => users.id).notNull(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
+  startDate: timestamp("start_date"),
+  endDate: timestamp("end_date"),
   isPublic: boolean("is_public").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
-  ownerIdx: index("owner_idx").on(t.ownerId),
+  userIdIdx: index("trip_user_id_idx").on(t.userId),
 }));
 
 export const tripStops = pgTable("trip_stops", {
   id: serial("id").primaryKey(),
-  tripId: integer("trip_id").references(() => trips.id).notNull(),
-  city: text("city").notNull(),
+  tripId: integer("trip_id").notNull().references(() => trips.id, { onDelete: "cascade" }),
+  cityName: text("city_name").notNull(),
+  country: text("country").notNull(),
   arrivalDate: timestamp("arrival_date").notNull(),
   departureDate: timestamp("departure_date").notNull(),
-  order: integer("order").notNull(),
+  orderIndex: integer("order_index").notNull().default(0),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
-  tripStopsIdx: index("trip_stops_idx").on(t.tripId),
+  tripIdIdx: index("stop_trip_id_idx").on(t.tripId),
+  orderIdx: index("stop_order_idx").on(t.tripId, t.orderIndex),
 }));
 
 export const activities = pgTable("activities", {
@@ -47,13 +57,22 @@ export const activities = pgTable("activities", {
 
 export const tripActivities = pgTable("trip_activities", {
   id: serial("id").primaryKey(),
-  tripStopId: integer("trip_stop_id").references(() => tripStops.id).notNull(),
-  activityId: integer("activity_id").references(() => activities.id).notNull(),
-  startTime: timestamp("start_time"),
-  actualCost: decimal("actual_cost", { precision: 10, scale: 2 }),
+  tripId: integer("trip_id").notNull().references(() => trips.id, { onDelete: "cascade" }),
+  stopId: integer("stop_id").references(() => tripStops.id, { onDelete: "cascade" }),
+  activityId: integer("activity_id").notNull().references(() => activities.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  scheduledDate: timestamp("scheduled_date").notNull(),
+  cost: numeric("cost", { precision: 10, scale: 2 }).default("0"),
+  duration: integer("duration"),
+  orderIndex: integer("order_index").notNull().default(0),
   notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
-  stopActivityIdx: index("stop_activity_idx").on(t.tripStopId, t.activityId),
+  tripIdIdx: index("trip_activity_trip_id_idx").on(t.tripId),
+  stopIdIdx: index("trip_activity_stop_id_idx").on(t.stopId),
+  activityIdIdx: index("trip_activity_activity_id_idx").on(t.activityId),
+  dateIdx: index("trip_activity_date_idx").on(t.scheduledDate),
 }));
 
 export const budgets = pgTable("budgets", {
@@ -84,8 +103,12 @@ export const usersRelations = relations(users, ({ many }) => ({
 }));
 
 export const tripsRelations = relations(trips, ({ one, many }) => ({
-  owner: one(users, { fields: [trips.ownerId], references: [users.id] }),
+  user: one(users, {
+    fields: [trips.userId],
+    references: [users.id],
+  }),
   stops: many(tripStops),
+  activities: many(tripActivities),
   budgets: many(budgets),
   sharedWith: many(sharedTrips),
 }));
@@ -100,8 +123,18 @@ export const activitiesRelations = relations(activities, ({ many }) => ({
 }));
 
 export const tripActivitiesRelations = relations(tripActivities, ({ one }) => ({
-  stop: one(tripStops, { fields: [tripActivities.tripStopId], references: [tripStops.id] }),
-  activity: one(activities, { fields: [tripActivities.activityId], references: [activities.id] }),
+  trip: one(trips, {
+    fields: [tripActivities.tripId],
+    references: [trips.id],
+  }),
+  stop: one(tripStops, {
+    fields: [tripActivities.stopId],
+    references: [tripStops.id],
+  }),
+  activity: one(activities, {
+    fields: [tripActivities.activityId],
+    references: [activities.id],
+  }),
 }));
 
 export const budgetsRelations = relations(budgets, ({ one }) => ({
@@ -115,11 +148,14 @@ export const sharedTripsRelations = relations(sharedTrips, ({ one }) => ({
 
 // === BASE SCHEMAS ===
 
-export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, password: true, resetToken: true, resetTokenExpiry: true });
 export const insertTripSchema = createInsertSchema(trips).omit({ id: true, createdAt: true });
 export const insertTripStopSchema = createInsertSchema(tripStops).omit({ id: true });
 export const insertActivitySchema = createInsertSchema(activities).omit({ id: true });
-export const insertTripActivitySchema = createInsertSchema(tripActivities).omit({ id: true });
+export const insertTripActivitySchema = createInsertSchema(tripActivities).omit({
+  id: true,
+  createdAt: true,
+});
 export const insertBudgetSchema = createInsertSchema(budgets).omit({ id: true });
 export const insertSharedTripSchema = createInsertSchema(sharedTrips).omit({ sharedAt: true });
 

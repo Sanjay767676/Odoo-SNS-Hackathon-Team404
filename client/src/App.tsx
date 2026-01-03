@@ -5,11 +5,13 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import { AppLayout } from "@/components/AppLayout";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 // Import pages
 import Dashboard from "@/pages/Dashboard";
 import CreateTrip from "@/pages/CreateTrip";
 import MyTrips from "@/pages/MyTrips";
+import TripDetail from "@/pages/TripDetail";
 import ItineraryBuilder from "@/pages/ItineraryBuilder";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
@@ -20,16 +22,19 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
       <Route>
-        <AppLayout>
-          <Switch>
-            <Route path="/" component={Dashboard} />
-            <Route path="/dashboard" component={Dashboard} />
-            <Route path="/create-trip" component={CreateTrip} />
-            <Route path="/trips" component={MyTrips} />
-            <Route path="/builder" component={ItineraryBuilder} />
-            <Route component={NotFound} />
-          </Switch>
-        </AppLayout>
+        <ProtectedRoute>
+          <AppLayout>
+            <Switch>
+              <Route path="/" component={Dashboard} />
+              <Route path="/dashboard" component={Dashboard} />
+              <Route path="/create-trip" component={CreateTrip} />
+              <Route path="/trips" component={MyTrips} />
+              <Route path="/trips/:id" component={TripDetail} />
+              <Route path="/builder" component={ItineraryBuilder} />
+              <Route component={NotFound} />
+            </Switch>
+          </AppLayout>
+        </ProtectedRoute>
       </Route>
     </Switch>
   );
