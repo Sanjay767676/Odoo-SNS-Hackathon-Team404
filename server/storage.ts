@@ -1,6 +1,14 @@
-import { users, trips, tripStops, activities, tripActivities, budgets, sharedTrips, type User, type InsertUser, type Trip, type InsertTrip, type TripStop, type InsertTripStop, type Activity, type InsertActivity, type TripActivity, type InsertTripActivity, type Budget, type InsertBudget, type SharedTrip, type InsertSharedTrip } from "@shared/schema";
+import { 
+  users, trips, tripStops, activities, tripActivities, budgets, sharedTrips, 
+  type User, type InsertUser, 
+  type Trip, type InsertTrip, 
+  type TripStop, type InsertTripStop, 
+  type Activity, type InsertActivity, 
+  type TripActivity, type InsertTripActivity, 
+  type Budget, type InsertBudget 
+} from "@shared/schema";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 export interface IStorage {
   // User operations
@@ -10,21 +18,26 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
 
   // Trip operations
-  getTrips(): Promise<Trip[]>;
-  getTrip(id: number): Promise<Trip | undefined>;
+  getTrips(userId: number): Promise<Trip[]>;
+  getTrip(id: number, userId: number): Promise<Trip | undefined>;
   createTrip(trip: InsertTrip): Promise<Trip>;
+  updateTrip(id: number, userId: number, updates: Partial<InsertTrip>): Promise<Trip | undefined>;
+  deleteTrip(id: number, userId: number): Promise<boolean>;
 
   // Stop operations
-  getStopsByTrip(tripId: number): Promise<TripStop[]>;
+  getStopsByTrip(tripId: number, userId: number): Promise<TripStop[]>;
   createStop(stop: InsertTripStop): Promise<TripStop>;
+  deleteStop(id: number, userId: number): Promise<boolean>;
+  updateStopOrder(id: number, userId: number, order: number): Promise<TripStop | undefined>;
 
   // Activity operations
   getActivities(): Promise<Activity[]>;
   createActivity(activity: InsertActivity): Promise<Activity>;
 
   // Trip Activity operations
-  getTripActivitiesByStop(tripStopId: number): Promise<TripActivity[]>;
+  getTripActivitiesByStop(tripStopId: number, userId: number): Promise<TripActivity[]>;
   createTripActivity(tripActivity: InsertTripActivity): Promise<TripActivity>;
+  deleteTripActivity(id: number, userId: number): Promise<boolean>;
 
   // Budget operations
   getBudgetsByTrip(tripId: number): Promise<Budget[]>;
@@ -51,12 +64,13 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getTrips(): Promise<Trip[]> {
-    return await db.select().from(trips);
+  // Trip operations with ownership
+  async getTrips(userId: number): Promise<Trip[]> {
+    return await db.select().from(trips).where(eq(trips.ownerId, userId));
   }
 
-  async getTrip(id: number): Promise<Trip | undefined> {
-    const [trip] = await db.select().from(trips).where(eq(trips.id, id));
+  async getTrip(id: number, userId: number): Promise<Trip | undefined> {
+    const [trip] = await db.select().from(trips).where(and(eq(trips.id, id), eq(trips.ownerId, userId)));
     return trip;
   }
 
@@ -65,7 +79,23 @@ export class DatabaseStorage implements IStorage {
     return trip;
   }
 
-  async getStopsByTrip(tripId: number): Promise<TripStop[]> {
+  async updateTrip(id: number, userId: number, updates: Partial<InsertTrip>): Promise<Trip | undefined> {
+    const [updated] = await db.update(trips)
+      .set(updates)
+      .where(and(eq(trips.id, id), eq(trips.ownerId, userId)))
+      .returning();
+    return updated;
+  }
+
+  async deleteTrip(id: number, userId: number): Promise<boolean> {
+    const result = await db.delete(trips).where(and(eq(trips.id, id), eq(trips.ownerId, userId)));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  // Stop operations
+  async getStopsByTrip(tripId: number, userId: number): Promise<TripStop[]> {
+    const trip = await this.getTrip(tripId, userId);
+    if (!trip) return [];
     return await db.select().from(tripStops).where(eq(tripStops.tripId, tripId));
   }
 
@@ -74,6 +104,27 @@ export class DatabaseStorage implements IStorage {
     return stop;
   }
 
+  async deleteStop(id: number, userId: number): Promise<boolean> {
+    const result = await db.delete(tripStops)
+      .where(and(
+        eq(tripStops.id, id),
+        sql`trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId})`
+      ));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  async updateStopOrder(id: number, userId: number, order: number): Promise<TripStop | undefined> {
+    const [updated] = await db.update(tripStops)
+      .set({ order })
+      .where(and(
+        eq(tripStops.id, id),
+        sql`trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId})`
+      ))
+      .returning();
+    return updated;
+  }
+
+  // Activity operations
   async getActivities(): Promise<Activity[]> {
     return await db.select().from(activities);
   }
@@ -83,7 +134,15 @@ export class DatabaseStorage implements IStorage {
     return activity;
   }
 
-  async getTripActivitiesByStop(tripStopId: number): Promise<TripActivity[]> {
+  // Trip Activity operations
+  async getTripActivitiesByStop(tripStopId: number, userId: number): Promise<TripActivity[]> {
+    const [stop] = await db.select()
+      .from(tripStops)
+      .where(and(
+        eq(tripStops.id, tripStopId),
+        sql`trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId})`
+      ));
+    if (!stop) return [];
     return await db.select().from(tripActivities).where(eq(tripActivities.tripStopId, tripStopId));
   }
 
@@ -92,6 +151,16 @@ export class DatabaseStorage implements IStorage {
     return tripActivity;
   }
 
+  async deleteTripActivity(id: number, userId: number): Promise<boolean> {
+    const result = await db.delete(tripActivities)
+      .where(and(
+        eq(tripActivities.id, id),
+        sql`trip_stop_id IN (SELECT id FROM trip_stops WHERE trip_id IN (SELECT id FROM trips WHERE owner_id = ${userId}))`
+      ));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  // Budget operations
   async getBudgetsByTrip(tripId: number): Promise<Budget[]> {
     return await db.select().from(budgets).where(eq(budgets.tripId, tripId));
   }

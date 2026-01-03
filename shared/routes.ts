@@ -5,8 +5,7 @@ import {
   insertTripStopSchema, tripStops,
   insertActivitySchema, activities,
   insertTripActivitySchema, tripActivities,
-  insertBudgetSchema, budgets,
-  sharedTrips
+  insertBudgetSchema, budgets
 } from './schema';
 
 export const errorSchemas = {
@@ -15,6 +14,9 @@ export const errorSchemas = {
     field: z.string().optional(),
   }),
   notFound: z.object({
+    message: z.string(),
+  }),
+  unauthorized: z.object({
     message: z.string(),
   }),
   internal: z.object({
@@ -56,15 +58,34 @@ export const api = {
       responses: {
         200: z.custom<typeof trips.$inferSelect>(),
         404: errorSchemas.notFound,
+        403: errorSchemas.unauthorized,
       },
     },
     create: {
       method: 'POST' as const,
       path: '/api/trips',
-      input: insertTripSchema,
+      input: insertTripSchema.omit({ ownerId: true }),
       responses: {
         201: z.custom<typeof trips.$inferSelect>(),
         400: errorSchemas.validation,
+      },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/trips/:id',
+      input: insertTripSchema.partial(),
+      responses: {
+        200: z.custom<typeof trips.$inferSelect>(),
+        404: errorSchemas.notFound,
+        400: errorSchemas.validation,
+      },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/trips/:id',
+      responses: {
+        204: z.void(),
+        404: errorSchemas.notFound,
       },
     },
   },
@@ -74,6 +95,7 @@ export const api = {
       path: '/api/trips/:tripId/stops',
       responses: {
         200: z.array(z.custom<typeof tripStops.$inferSelect>()),
+        403: errorSchemas.unauthorized,
       },
     },
     create: {
@@ -83,6 +105,24 @@ export const api = {
       responses: {
         201: z.custom<typeof tripStops.$inferSelect>(),
         400: errorSchemas.validation,
+        403: errorSchemas.unauthorized,
+      },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/stops/:id',
+      responses: {
+        204: z.void(),
+        404: errorSchemas.notFound,
+      },
+    },
+    reorder: {
+      method: 'PATCH' as const,
+      path: '/api/stops/:id/order',
+      input: z.object({ order: z.number() }),
+      responses: {
+        200: z.custom<typeof tripStops.$inferSelect>(),
+        404: errorSchemas.notFound,
       },
     },
   },
@@ -94,13 +134,12 @@ export const api = {
         200: z.array(z.custom<typeof activities.$inferSelect>()),
       },
     },
-    create: {
-      method: 'POST' as const,
-      path: '/api/activities',
-      input: insertActivitySchema,
+    search: {
+      method: 'GET' as const,
+      path: '/api/activities/search',
+      input: z.object({ q: z.string() }),
       responses: {
-        201: z.custom<typeof activities.$inferSelect>(),
-        400: errorSchemas.validation,
+        200: z.array(z.custom<typeof activities.$inferSelect>()),
       },
     },
   },
@@ -110,6 +149,7 @@ export const api = {
       path: '/api/trip-stops/:tripStopId/activities',
       responses: {
         200: z.array(z.custom<typeof tripActivities.$inferSelect>()),
+        403: errorSchemas.unauthorized,
       },
     },
     create: {
@@ -119,24 +159,15 @@ export const api = {
       responses: {
         201: z.custom<typeof tripActivities.$inferSelect>(),
         400: errorSchemas.validation,
+        403: errorSchemas.unauthorized,
       },
     },
-  },
-  budgets: {
-    listByTrip: {
-      method: 'GET' as const,
-      path: '/api/trips/:tripId/budgets',
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/trip-activities/:id',
       responses: {
-        200: z.array(z.custom<typeof budgets.$inferSelect>()),
-      },
-    },
-    create: {
-      method: 'POST' as const,
-      path: '/api/trips/:tripId/budgets',
-      input: insertBudgetSchema.omit({ tripId: true }),
-      responses: {
-        201: z.custom<typeof budgets.$inferSelect>(),
-        400: errorSchemas.validation,
+        204: z.void(),
+        404: errorSchemas.notFound,
       },
     },
   },

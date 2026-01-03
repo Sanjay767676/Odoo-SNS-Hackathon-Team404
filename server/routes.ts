@@ -1,56 +1,55 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 
+// Mock auth middleware - assuming user ID is in req.user
+// Since JWT middleware is mentioned as already implemented but not shown,
+// we will assume req.user.id exists.
+const authenticate = (req: Request, res: Response, next: NextFunction) => {
+  // In a real app, this would be set by passport/jwt middleware
+  // For now, we'll try to get it from a header or default for testing
+  const userId = req.headers["x-user-id"];
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  (req as any).user = { id: Number(userId) };
+  next();
+};
+
 async function seedDatabase() {
   const existingUsers = await storage.getUsers();
   if (existingUsers.length === 0) {
-    const user = await storage.createUser({ name: "Alice Smith", email: "alice@example.com" });
+    const user = await storage.createUser({ name: "Traveler", email: "traveler@example.com" });
     const trip = await storage.createTrip({ 
       ownerId: user.id, 
-      title: "Summer in Europe", 
-      description: "Visiting Paris and Rome", 
+      title: "My Adventure", 
+      description: "Exploring the world", 
       isPublic: true 
     });
     
-    const stop1 = await storage.createStop({
+    const stop = await storage.createStop({
       tripId: trip.id,
-      city: "Paris",
-      arrivalDate: new Date("2024-06-01"),
-      departureDate: new Date("2024-06-05"),
+      city: "London",
+      arrivalDate: new Date(),
+      departureDate: new Date(),
       order: 1
     });
 
-    const stop2 = await storage.createStop({
-      tripId: trip.id,
-      city: "Rome",
-      arrivalDate: new Date("2024-06-06"),
-      departureDate: new Date("2024-06-10"),
-      order: 2
-    });
-
     const activity = await storage.createActivity({
-      name: "Eiffel Tower Visit",
+      name: "Big Ben",
       category: "Sightseeing",
-      description: "View from the top",
-      defaultCost: "25.00"
+      description: "Famous clock tower",
+      defaultCost: "0"
     });
 
     await storage.createTripActivity({
-      tripStopId: stop1.id,
+      tripStopId: stop.id,
       activityId: activity.id,
-      startTime: new Date("2024-06-02T10:00:00Z"),
-      actualCost: "30.00",
-      notes: "Book in advance"
-    });
-
-    await storage.createBudget({
-      tripId: trip.id,
-      category: "Transport",
-      amount: "500.00",
-      currency: "USD"
+      startTime: new Date(),
+      actualCost: "0",
+      notes: "Free to see from outside"
     });
   }
 }
@@ -61,57 +60,64 @@ export async function registerRoutes(
 ): Promise<Server> {
   await seedDatabase();
 
-  app.get(api.users.get.path, async (req, res) => {
-    const user = await storage.getUser(Number(req.params.id));
-    if (!user) return res.status(404).json({ message: "User not found" });
-    res.json(user);
-  });
-
-  app.post(api.users.create.path, async (req, res) => {
-    try {
-      const input = api.users.create.input.parse(req.body);
-      const user = await storage.createUser(input);
-      res.status(201).json(user);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      throw err;
-    }
-  });
-
-  app.get(api.trips.list.path, async (req, res) => {
-    const trips = await storage.getTrips();
+  // Trips
+  app.get(api.trips.list.path, authenticate, async (req: any, res) => {
+    const trips = await storage.getTrips(req.user.id);
     res.json(trips);
   });
 
-  app.get(api.trips.get.path, async (req, res) => {
-    const trip = await storage.getTrip(Number(req.params.id));
+  app.get(api.trips.get.path, authenticate, async (req: any, res) => {
+    const trip = await storage.getTrip(Number(req.params.id), req.user.id);
     if (!trip) return res.status(404).json({ message: "Trip not found" });
     res.json(trip);
   });
 
-  app.post(api.trips.create.path, async (req, res) => {
+  app.post(api.trips.create.path, authenticate, async (req: any, res) => {
     try {
       const input = api.trips.create.input.parse(req.body);
-      const trip = await storage.createTrip(input);
+      const trip = await storage.createTrip({ ...input, ownerId: req.user.id });
       res.status(201).json(trip);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0].message });
       }
-      throw err;
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
-  app.get(api.tripStops.listByTrip.path, async (req, res) => {
-    const stops = await storage.getStopsByTrip(Number(req.params.tripId));
+  app.patch(api.trips.update.path, authenticate, async (req: any, res) => {
+    try {
+      const input = api.trips.update.input.parse(req.body);
+      const trip = await storage.updateTrip(Number(req.params.id), req.user.id, input);
+      if (!trip) return res.status(404).json({ message: "Trip not found" });
+      res.json(trip);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.delete(api.trips.delete.path, authenticate, async (req: any, res) => {
+    const deleted = await storage.deleteTrip(Number(req.params.id), req.user.id);
+    if (!deleted) return res.status(404).json({ message: "Trip not found" });
+    res.status(204).end();
+  });
+
+  // Trip Stops
+  app.get(api.tripStops.listByTrip.path, authenticate, async (req: any, res) => {
+    const stops = await storage.getStopsByTrip(Number(req.params.tripId), req.user.id);
     res.json(stops);
   });
 
-  app.post(api.tripStops.create.path, async (req, res) => {
+  app.post(api.tripStops.create.path, authenticate, async (req: any, res) => {
     try {
       const tripId = Number(req.params.tripId);
+      // Verify trip ownership
+      const trip = await storage.getTrip(tripId, req.user.id);
+      if (!trip) return res.status(403).json({ message: "Forbidden" });
+
       const input = api.tripStops.create.input.parse(req.body);
       const stop = await storage.createStop({ ...input, tripId });
       res.status(201).json(stop);
@@ -119,34 +125,36 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0].message });
       }
-      throw err;
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
-  app.get(api.activities.list.path, async (req, res) => {
-    const activitiesList = await storage.getActivities();
-    res.json(activitiesList);
+  app.delete(api.tripStops.delete.path, authenticate, async (req: any, res) => {
+    const deleted = await storage.deleteStop(Number(req.params.id), req.user.id);
+    if (!deleted) return res.status(404).json({ message: "Stop not found" });
+    res.status(204).end();
   });
 
-  app.post(api.activities.create.path, async (req, res) => {
-    try {
-      const input = api.activities.create.input.parse(req.body);
-      const activity = await storage.createActivity(input);
-      res.status(201).json(activity);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      throw err;
-    }
+  app.patch(api.tripStops.reorder.path, authenticate, async (req: any, res) => {
+    const input = api.tripStops.reorder.input.parse(req.body);
+    const stop = await storage.updateStopOrder(Number(req.params.id), req.user.id, input.order);
+    if (!stop) return res.status(404).json({ message: "Stop not found" });
+    res.json(stop);
   });
 
-  app.get(api.tripActivities.listByStop.path, async (req, res) => {
-    const activities = await storage.getTripActivitiesByStop(Number(req.params.tripStopId));
+  // Activities (Search/Read-only)
+  app.get(api.activities.list.path, authenticate, async (req, res) => {
+    const list = await storage.getActivities();
+    res.json(list);
+  });
+
+  // Trip Activities
+  app.get(api.tripActivities.listByStop.path, authenticate, async (req: any, res) => {
+    const activities = await storage.getTripActivitiesByStop(Number(req.params.tripStopId), req.user.id);
     res.json(activities);
   });
 
-  app.post(api.tripActivities.create.path, async (req, res) => {
+  app.post(api.tripActivities.create.path, authenticate, async (req: any, res) => {
     try {
       const tripStopId = Number(req.params.tripStopId);
       const input = api.tripActivities.create.input.parse(req.body);
@@ -156,27 +164,14 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0].message });
       }
-      throw err;
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
-  app.get(api.budgets.listByTrip.path, async (req, res) => {
-    const budgetList = await storage.getBudgetsByTrip(Number(req.params.tripId));
-    res.json(budgetList);
-  });
-
-  app.post(api.budgets.create.path, async (req, res) => {
-    try {
-      const tripId = Number(req.params.tripId);
-      const input = api.budgets.create.input.parse(req.body);
-      const budget = await storage.createBudget({ ...input, tripId });
-      res.status(201).json(budget);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      throw err;
-    }
+  app.delete(api.tripActivities.delete.path, authenticate, async (req: any, res) => {
+    const deleted = await storage.deleteTripActivity(Number(req.params.id), req.user.id);
+    if (!deleted) return res.status(404).json({ message: "Activity not found" });
+    res.status(204).end();
   });
 
   return httpServer;
