@@ -18,6 +18,9 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Edit, Trash2, Globe, Lock, MapPin, Calendar } from "lucide-react";
 import { motion } from "framer-motion";
+import TripItinerary from "@/components/TripItinerary";
+import AddStopDialog from "@/components/AddStopDialog";
+import { type TripStop, type TripActivity } from "@shared/schema";
 
 interface Trip {
     id: number;
@@ -44,6 +47,61 @@ export default function TripDetail() {
             return res.json();
         },
         enabled: !!id,
+    });
+
+    const { data: stops } = useQuery<TripStop[]>({
+        queryKey: ["stops", id],
+        queryFn: async () => {
+            const res = await fetch(`/api/trips/${id}/stops`);
+            if (!res.ok) throw new Error("Failed to fetch stops");
+            return res.json();
+        },
+        enabled: !!id,
+    });
+
+    const { data: allActivities } = useQuery<TripActivity[]>({
+        queryKey: ["activities", "all", id],
+        queryFn: async () => {
+            const res = await fetch(`/api/trips/${id}/activities`);
+            if (!res.ok) throw new Error("Failed to fetch activities");
+            return res.json();
+        },
+        enabled: !!id,
+    });
+
+    const totalBudget = allActivities?.reduce((acc, act) => acc + parseFloat(act.cost || "0"), 0) || 0;
+
+    const tripDuration = stops && stops.length > 0
+        ? Math.max(1, Math.ceil((new Date(stops[stops.length - 1].departureDate).getTime() - new Date(stops[0].arrivalDate).getTime()) / (1000 * 60 * 60 * 24)))
+        : 1;
+
+    const dailyAverage = totalBudget / tripDuration;
+    const isOverBudget = dailyAverage > 200;
+
+    const togglePublicMutation = useMutation({
+        mutationFn: async () => {
+            const res = await fetch(`/api/trips/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ isPublic: !trip?.isPublic }),
+            });
+            if (!res.ok) throw new Error("Failed to update trip privacy");
+            return res.json();
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["trip", id] });
+            toast({
+                title: "Privacy updated",
+                description: `Your trip is now ${!trip?.isPublic ? "public" : "private"}.`,
+            });
+        },
+        onError: (error: Error) => {
+            toast({
+                title: "Update failed",
+                description: error.message,
+                variant: "destructive",
+            });
+        },
     });
 
     const deleteTripMutation = useMutation({
@@ -186,20 +244,13 @@ export default function TripDetail() {
                         </CardContent>
                     </Card>
 
-                    <Card>
-                        <CardHeader>
+                    <Card id="itinerary-section">
+                        <CardHeader className="pb-3">
                             <CardTitle>Itinerary</CardTitle>
                             <CardDescription>Stops and activities for this trip</CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <div className="text-center py-8">
-                                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-                                <p className="text-muted-foreground mb-4">No stops added yet</p>
-                                <Button variant="outline" size="sm">
-                                    <MapPin className="w-4 h-4 mr-2" />
-                                    Add First Stop
-                                </Button>
-                            </div>
+                            <TripItinerary tripId={Number(id)} />
                         </CardContent>
                     </Card>
                 </div>
@@ -211,11 +262,11 @@ export default function TripDetail() {
                             <CardTitle>Quick Actions</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2">
-                            <Button variant="outline" className="w-full justify-start gap-2">
-                                <MapPin className="w-4 h-4" />
-                                Add Stop
-                            </Button>
-                            <Button variant="outline" className="w-full justify-start gap-2">
+                            <AddStopDialog tripId={Number(id)} />
+                            <Button variant="outline" className="w-full justify-start gap-2" onClick={() => {
+                                const el = document.getElementById('itinerary-section');
+                                if (el) el.scrollIntoView({ behavior: 'smooth' });
+                            }}>
                                 <Calendar className="w-4 h-4" />
                                 Build Itinerary
                             </Button>
@@ -227,17 +278,65 @@ export default function TripDetail() {
                             <CardTitle>Trip Stats</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-3">
-                            <div className="flex justify-between">
-                                <span className="text-sm text-muted-foreground">Stops</span>
-                                <span className="font-semibold">0</span>
+                            <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Stops</span>
+                                <span className="font-medium">{stops?.length || 0}</span>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-sm text-muted-foreground">Activities</span>
-                                <span className="font-semibold">0</span>
+                            <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Total Days</span>
+                                <span className="font-medium">{tripDuration} days</span>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-sm text-muted-foreground">Budget</span>
-                                <span className="font-semibold">$0</span>
+                            <div className="flex justify-between text-sm pt-2 border-t">
+                                <span className="text-muted-foreground">Total Budget</span>
+                                <span className="font-bold text-primary">${totalBudget.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Daily Average</span>
+                                <span className="font-medium">${dailyAverage.toFixed(2)}</span>
+                            </div>
+                            {isOverBudget && (
+                                <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md">
+                                    <p className="text-xs text-destructive font-medium">
+                                        Budget Alert: Spending is high (${dailyAverage.toFixed(2)}/day). Average traveler budget is ~$150.
+                                    </p>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Share Trip</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <p className="text-sm text-muted-foreground">
+                                {trip.isPublic
+                                    ? "Anyone with the link can view this trip."
+                                    : "Only you can see this trip."}
+                            </p>
+                            <div className="flex gap-2">
+                                <Button
+                                    variant="outline"
+                                    className="flex-1 gap-2"
+                                    onClick={() => togglePublicMutation.mutate()}
+                                    disabled={togglePublicMutation.isPending}
+                                >
+                                    {trip.isPublic ? <Lock className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
+                                    Make {trip.isPublic ? "Private" : "Public"}
+                                </Button>
+                                {trip.isPublic && (
+                                    <Button
+                                        variant="default"
+                                        className="flex-1"
+                                        onClick={() => {
+                                            const url = `${window.location.origin}/share/${trip.id}`;
+                                            navigator.clipboard.writeText(url);
+                                            toast({ title: "Link copied!", description: "Share it with your friends." });
+                                        }}
+                                    >
+                                        Copy Link
+                                    </Button>
+                                )}
                             </div>
                         </CardContent>
                     </Card>

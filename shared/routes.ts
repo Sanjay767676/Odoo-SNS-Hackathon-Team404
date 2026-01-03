@@ -1,12 +1,15 @@
 import { z } from 'zod';
-import { 
-  insertUserSchema, users, 
+import {
+  insertUserSchema, users,
   insertTripSchema, trips,
   insertTripStopSchema, tripStops,
   insertActivitySchema, activities,
   insertTripActivitySchema, tripActivities,
-  insertBudgetSchema, budgets
+  insertBudgetSchema, budgets,
+  User, InsertUser, Trip, InsertTrip, TripStop, InsertTripStop, Activity, InsertActivity, TripActivity, InsertTripActivity
 } from './schema';
+
+export { type User, type InsertUser, type Trip, type InsertTrip, type TripStop, type InsertTripStop, type Activity, type InsertActivity, type TripActivity, type InsertTripActivity };
 
 export const errorSchemas = {
   validation: z.object({
@@ -26,6 +29,13 @@ export const errorSchemas = {
 
 export const api = {
   users: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/users',
+      responses: {
+        200: z.array(z.custom<User>()),
+      },
+    },
     get: {
       method: 'GET' as const,
       path: '/api/users/:id',
@@ -64,7 +74,7 @@ export const api = {
     create: {
       method: 'POST' as const,
       path: '/api/trips',
-      input: insertTripSchema.omit({ ownerId: true }),
+      input: insertTripSchema.omit({ userId: true }),
       responses: {
         201: z.custom<typeof trips.$inferSelect>(),
         400: errorSchemas.validation,
@@ -146,7 +156,7 @@ export const api = {
   tripActivities: {
     listByStop: {
       method: 'GET' as const,
-      path: '/api/trip-stops/:tripStopId/activities',
+      path: '/api/trip-stops/:stopId/activities',
       responses: {
         200: z.array(z.custom<typeof tripActivities.$inferSelect>()),
         403: errorSchemas.unauthorized,
@@ -154,8 +164,8 @@ export const api = {
     },
     create: {
       method: 'POST' as const,
-      path: '/api/trip-stops/:tripStopId/activities',
-      input: insertTripActivitySchema.omit({ tripStopId: true }),
+      path: '/api/trip-stops/:stopId/activities',
+      input: insertTripActivitySchema.omit({ stopId: true }),
       responses: {
         201: z.custom<typeof tripActivities.$inferSelect>(),
         400: errorSchemas.validation,

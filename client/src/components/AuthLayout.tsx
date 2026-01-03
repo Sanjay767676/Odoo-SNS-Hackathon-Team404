@@ -1,10 +1,9 @@
 import { Suspense, lazy } from "react";
 import { motion } from "framer-motion";
-import { Compass } from "lucide-react";
 
 const Spline = lazy(() => import("@splinetool/react-spline"));
 
-export default function AuthLayout({ children, title, subtitle }: { 
+export default function AuthLayout({ children, title, subtitle }: {
   children: React.ReactNode;
   title: string;
   subtitle: string;
@@ -12,7 +11,7 @@ export default function AuthLayout({ children, title, subtitle }: {
   return (
     <div className="min-h-screen flex bg-background">
       {/* Left side: Form */}
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.5 }}
@@ -20,10 +19,10 @@ export default function AuthLayout({ children, title, subtitle }: {
       >
         <div className="max-w-md w-full mx-auto">
           <div className="flex items-center gap-2 mb-8">
-            <Compass className="w-8 h-8 text-primary" />
+            <img src="/favicon.png" alt="GlobeTrotter Logo" className="w-10 h-10 object-contain" />
             <span className="text-2xl font-bold tracking-tight">GlobeTrotter</span>
           </div>
-          
+
           <div className="mb-10">
             <h1 className="text-3xl font-bold tracking-tight mb-2">{title}</h1>
             <p className="text-muted-foreground">{subtitle}</p>
@@ -41,13 +40,13 @@ export default function AuthLayout({ children, title, subtitle }: {
           </div>
         }>
           <div className="absolute inset-0 w-full h-full scale-110">
-            <Spline scene="https://prod.spline.design/6Wq1Q7YInFe9u800/scene.splinecode" />
+            <div className="w-full h-full bg-gradient-to-br from-primary/10 via-background to-primary/5" />
           </div>
         </Suspense>
-        
+
         {/* Dark wash for readability of overlaid text if any */}
         <div className="absolute inset-0 bg-gradient-to-t from-background/40 to-transparent pointer-events-none" />
-        
+
         <div className="absolute bottom-12 left-12 right-12 z-20">
           <motion.div
             initial={{ opacity: 0, y: 20 }}

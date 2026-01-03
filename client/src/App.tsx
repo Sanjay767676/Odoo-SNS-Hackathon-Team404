@@ -15,12 +15,14 @@ import TripDetail from "@/pages/TripDetail";
 import ItineraryBuilder from "@/pages/ItineraryBuilder";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
+import PublicTripView from "@/pages/PublicTripView";
 
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
+      <Route path="/share/:id" component={PublicTripView} />
       <Route>
         <ProtectedRoute>
           <AppLayout>

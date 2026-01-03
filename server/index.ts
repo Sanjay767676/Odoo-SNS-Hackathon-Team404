@@ -1,6 +1,8 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
+import { storage } from "./storage";
 import { createServer } from "http";
 import helmet from "helmet";
 import compression from "compression";
@@ -79,7 +81,10 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  log("Registering routes...");
   await registerRoutes(httpServer, app);
+  await storage.seedActivities();
+  log("Routes registered successfully and activities seeded.");
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -108,10 +113,12 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       log(`serving on port ${port}`);
     },
-  );
+  ).on('error', (err) => {
+    log(`HTTP Server Error: ${err.message}`, "error");
+    process.exit(1);
+  });
 })();

@@ -34,19 +34,21 @@ export interface IStorage {
   getStopsByTrip(tripId: number, userId: number): Promise<TripStop[]>;
   createTripStop(stop: InsertTripStop): Promise<TripStop>;
   updateTripStop(id: number, updates: Partial<InsertTripStop>): Promise<TripStop | undefined>;
-  deleteTripStop(id: number): Promise<void>;
+  deleteTripStop(id: number): Promise<boolean>;
   updateStopOrder(id: number, userId: number, order: number): Promise<TripStop | undefined>;
 
   // Activity operations
   getActivities(): Promise<Activity[]>;
+  searchActivities(query: string): Promise<Activity[]>;
   createActivity(activity: InsertActivity): Promise<Activity>;
+  seedActivities(): Promise<void>;
 
   // Trip Activity operations
   getTripActivities(tripId: number): Promise<TripActivity[]>;
   getTripActivityById(id: number): Promise<TripActivity | undefined>;
   getTripActivitiesByStop(tripStopId: number, userId: number): Promise<TripActivity[]>;
   createTripActivity(tripActivity: InsertTripActivity): Promise<TripActivity>;
-  deleteTripActivity(id: number): Promise<void>;
+  deleteTripActivity(id: number): Promise<boolean>;
 
   // Budget operations
   getBudgetsByTrip(tripId: number): Promise<Budget[]>;
@@ -168,8 +170,9 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async deleteTripStop(id: number): Promise<void> {
-    await db.delete(tripStops).where(eq(tripStops.id, id));
+  async deleteTripStop(id: number): Promise<boolean> {
+    const result = await db.delete(tripStops).where(eq(tripStops.id, id));
+    return result.rowCount ? result.rowCount > 0 : false;
   }
 
 
@@ -182,14 +185,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   // === ACTIVITIES ===
-
   async getActivities(): Promise<Activity[]> {
     return await db.select().from(activities);
+  }
+
+  async searchActivities(query: string): Promise<Activity[]> {
+    return await db.select().from(activities)
+      .where(sql`LOWER(${activities.name}) LIKE LOWER(${'%' + query + '%'})`);
   }
 
   async createActivity(insertActivity: InsertActivity): Promise<Activity> {
     const [activity] = await db.insert(activities).values(insertActivity).returning();
     return activity;
+  }
+
+  async seedActivities() {
+    const existing = await db.select().from(activities).limit(1);
+    if (existing.length === 0) {
+      await db.insert(activities).values([
+        { name: "Eiffel Tower Visit", category: "Sightseeing", description: "Visit the iconic iron lattice tower", defaultCost: "30.00" },
+        { name: "Louvre Museum", category: "Culture", description: "World's largest art museum", defaultCost: "25.00" },
+        { name: "Colosseum Tour", category: "History", description: "Ancient Roman amphitheatre", defaultCost: "40.00" },
+        { name: "Sushi Making Class", category: "Food", description: "Learn to make authentic sushi", defaultCost: "80.00" },
+        { name: "Grand Canal Gondola", category: "Experience", description: "Romantic ride in Venice", defaultCost: "100.00" },
+        { name: "Statue of Liberty Ferry", category: "Sightseeing", description: "Visit the symbol of freedom", defaultCost: "20.00" },
+        { name: "Mount Fuji Day Trip", category: "Nature", description: "Full day tour to Japan's highest peak", defaultCost: "120.00" },
+        { name: "Wine Tasting in Tuscany", category: "Food & Drink", description: "Visit local vineyards", defaultCost: "90.00" },
+        { name: "Northern Lights Tour", category: "Nature", description: "Hunt for the aurora borealis", defaultCost: "150.00" },
+        { name: "Safari in Kruger Park", category: "Adventure", description: "African wildlife experience", defaultCost: "250.00" },
+      ]);
+    }
   }
 
   // === TRIP ACTIVITIES ===
@@ -219,8 +244,9 @@ export class DatabaseStorage implements IStorage {
     return tripActivity;
   }
 
-  async deleteTripActivity(id: number): Promise<void> {
-    await db.delete(tripActivities).where(eq(tripActivities.id, id));
+  async deleteTripActivity(id: number): Promise<boolean> {
+    const result = await db.delete(tripActivities).where(eq(tripActivities.id, id));
+    return result.rowCount ? result.rowCount > 0 : false;
   }
 
   // Budget operations

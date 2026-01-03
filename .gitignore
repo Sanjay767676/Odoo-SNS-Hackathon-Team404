@@ -5,9 +5,9 @@ server/public
 vite.config.ts.*
 *.tar.gz
 
-# Environment variables (NEVER commit these)
-.env
-.env.local
+# Environment variables (Included per user request)
+# .env
+# .env.local
 .env.development.local
 .env.test.local
 .env.production.local
