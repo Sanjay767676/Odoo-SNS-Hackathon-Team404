@@ -1,4 +1,4 @@
-# replit.md
+# .md
 
 ## Overview
 
